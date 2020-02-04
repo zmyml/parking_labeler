@@ -8,9 +8,9 @@ import json
 from detect_utils import parking_line
 from detect_utils import show_parking_line
 from create import create_json_record
-path_img = r'C:\Users\tongxin\Desktop\2019_10_10\DDT2G1907ZMY00009SY_1010'  # 路径
+path_img = r'E:\home_label\2020_01_25\DDT2G1907ZMY00040SY'  # 路径
 
-parking_space = 3  # 停车位个数 #需要手动改
+parking_space = 5  # 停车位个数 #需要手动改
 
 # #################不标车牌的IP##################
 no_plate_list = ['177', '211', '212', '221', '222', '231',
@@ -136,8 +136,8 @@ elif ip_name == 'DDT2G1907ZMY00016SY':
     h_h = 600   # 显示的最上边界
     h_l = 1450  # 显示的最下边界
 else:
-    h_h = 300   # 显示的最上边界
-    h_l = 1500  # 显示的最下边界
+    h_h = 1000   # 显示的最上边界
+    h_l = 1800  # 显示的最下边界
 
 # 标记窗口大小设置
 # 待修改
