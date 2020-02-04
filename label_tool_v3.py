@@ -8,14 +8,9 @@ import json
 from detect_utils import parking_line
 from detect_utils import show_parking_line
 from create import create_json_record
-# path_img = r'Y:\dataset\inroad_parking_videos\pics\2019_08_11\DDT2G1907ZMY00016SY'  # 路径
-path_img = r'C:\Users\tongxin\Desktop\2019_08_10\DDT2G1907ZMY00012SY'  # 路径
-# path_img = r'X:\20190905\2019_08_19\DDZ2G1907ZMY00002SY'  # 路径
-# path_img = r'Y:\dataset\inroad_parking_videos\pics\2019_02_22\test_170'  # 路径
-# path_img = r'E:\task_label\2019_02_23\test_170'  # 路径
-# path_img = r'E:\task_label\2019_03_20\test_211' #路径
-# path_img = r'Y:\dataset\inroad_parking_videos\pics\2019_02_22\test_170' #路径
-# path_img = r'E:\task_label\2019_01_26\test_170' #路径
+
+path_img = r'E:\home_label\2000_02_02\DDT2G1907ZMY00040SY'  # 路径
+
 parking_space = 5  # 停车位个数 #需要手动改
 
 # #################不标车牌的IP##################
@@ -133,8 +128,8 @@ elif ip_name == 'DDT2G1907ZMY00016SY':
     h_h = 600   # 显示的最上边界
     h_l = 1450  # 显示的最下边界
 else:
-    h_h = 800   # 显示的最上边界
-    h_l = 1500  # 显示的最下边界
+    h_h = 1000   # 显示的最上边界
+    h_l = 1800  # 显示的最下边界
 
 # 标记窗口大小设置
 # 待修改
@@ -620,8 +615,11 @@ while idx < img_len - 1:
         record_list = modify_record_list(record_list, list_img, idx)
 
     elif key == ord('l') or key == ord('L'):  # l leave 离开需要马上打印
-        record_list = complement_record_list(record_list, last_time, parking_space)
-        save_label_and_print(record_list, path_txt, parking_space)
+        if len(record_list) != 0:            
+            record_list = complement_record_list(record_list, last_time, parking_space)
+            save_label_and_print(record_list, path_txt, parking_space)
+        else:
+            print('there are no records to record !!!')
         # save_json_label(record_list, parking_space, path_json)
 
     elif key == 48 and parking_space > 0:  # 0
