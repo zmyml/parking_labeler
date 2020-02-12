@@ -2,6 +2,7 @@ from detect_utils import parking_line
 
 from concurrent.futures import ThreadPoolExecutor
 import datetime
+import json
 import os
 import PIL.Image
 from PySide2 import QtCore
@@ -10,31 +11,30 @@ import weakref
 
 ImageWidth = 3264
 ImageHeight = 2448
-ThumbWidth = 800
-ThumbHeight = 600
 
 
 class Camera:
     def __init__(self, camera_id):
         self.carports = []
         for port in parking_line[camera_id]:
-            port = [(p[0]/ImageWidth*ThumbWidth, p[1]/ImageHeight*ThumbHeight) for p in port]
+            port = [(p[0]/ImageWidth, p[1]/ImageHeight) for p in port]
             self.carports.append(port)
 
 
 class Image:
-    def __init__(self, path):
+    def __init__(self, path, date):
         self._path = path
+        year, month, day = date.split('_')
         filename = os.path.split(path)[1]
         hour, minute, second = filename[:8].split('_')
-        t = datetime.datetime(2020, 1, 1, int(hour), int(minute), int(second)).timestamp()
+        t = datetime.datetime(int(year), int(month), int(day), int(hour), int(minute), int(second)).timestamp()
         self.timestamp = int(t)
         self.thumbnail = None
 
-    def load_thumbnail(self):
-        img = PIL.Image.open(self._path)
-        img.thumbnail([ThumbWidth, ThumbHeight])
-        self.thumbnail = img
+    def load_thumbnail(self, size):
+        if not self.thumbnail:
+            self.thumbnail = PIL.Image.open(self._path)
+            self.thumbnail.thumbnail(size)
 
     def load_hd(self):
         return PIL.Image.open(self._path)
@@ -45,6 +45,10 @@ class ImageList(QtCore.QObject):
 
     def __init__(self, path):
         super().__init__()
+        head, camera_id = os.path.split(path)
+        _, date = os.path.split(head)
+        self._camera_id = camera_id
+        self._date = date
         self._path = path
         self._imgs = []
         for f in os.listdir(path):
@@ -55,7 +59,7 @@ class ImageList(QtCore.QObject):
                 new_path = os.path.join(path, f[11:19]+'.jpg')
                 os.rename(img_path, new_path)
                 img_path = new_path
-            img = Image(img_path)
+            img = Image(img_path, date)
             self._imgs.append(img)
         self._pool = ThreadPoolExecutor(max_workers=4)
         self._observer = None
@@ -81,13 +85,13 @@ class ImageList(QtCore.QObject):
     def __getitem__(self, item):
         return self._imgs[item]
 
-    def _async_load(self, idx, img):
-        img.load_thumbnail()
+    def _async_load(self, idx, size):
+        self.imgs[idx].load_thumbnail(size)
         self._signal.emit(idx)
 
-    def prefetch(self):
+    def prefetch(self, size):
         for idx, img in enumerate(self._imgs):
-            self._pool.submit(self._async_load, idx, img)
+            self._pool.submit(self._async_load, idx, size)
 
 
 class Duration:
@@ -102,16 +106,33 @@ class Record:
         self.port_idx = port_idx
         self.plate = plate
         self.begin = begin
-        self.durations = [Duration(*d) for d in durations]
+        self.durations = [Duration(**d) for d in durations]
         self.end = end
+
+    def as_dict(self):
+        return {
+            'port_idx': self.port_idx,
+            'plate': self.plate,
+            'begin': self.begin,
+            'durations': [d.__dict__ for d in self.durations],
+            'end': self.end
+        }
 
 
 class RecordList(QtCore.QObject):
     _signal = QtCore.Signal()
 
-    def __init__(self):
+    def __init__(self, path):
         super().__init__()
-        self._records = []
+        dst, camera_id = os.path.split(path)
+        self._label_path = os.path.join(dst, camera_id + '_label.json')
+        self._record_path = os.path.join(dst, camera_id+'_record.json')
+        if os.path.exists(self._record_path):
+            with open(self._record_path, mode='r', encoding='utf-8') as file:
+                records = json.load(file)
+            self._records = [Record(**r) for r in records]
+        else:
+            self._records = []
         self._observer = None
 
     @property
@@ -126,13 +147,8 @@ class RecordList(QtCore.QObject):
             self._signal.connect(observer.record_update)
         self._observer = weakref.ref(observer)
 
-    @property
-    def records(self):
-        return list(self._records)
-
     def add_record(self, record):
         self._records.append(record)
-        #todo: save
         self._signal.emit()
 
     def query_carports(self, timestamp):
@@ -142,3 +158,52 @@ class RecordList(QtCore.QObject):
                 for idx in record.port_idx:
                     busy.add(idx)
         return busy
+
+    def save(self):
+        def strftime(timestamp):
+            return datetime.datetime.fromtimestamp(timestamp).strftime('%H_%M_%S')
+
+        with open(self._record_path, mode='w', encoding='utf-8') as file:
+            json.dump([r.as_dict() for r in self._records], file, ensure_ascii=False, indent=4)
+
+        labels = []
+        for r in self._records:
+            time = []
+            parking_pos = []
+
+            if r.begin != r.durations[0].begin:
+                time.append([1, strftime(r.begin)])
+            time.append([2, strftime(r.durations[0].begin)])
+
+            for idx, d in enumerate(r.durations):
+                if idx != 0:
+                    # 除了第一段，每一段开头一定写
+                    time.append([2, strftime(d.begin)])
+
+                if idx != len(r.durations)-1:
+                    # 除了最后一段，都需要检查结尾
+                    if d.end != r.durations[idx+1].begin:
+                        time.append([1, strftime(d.end)])
+
+                if d.rect:
+                    x, y, w, h = d.rect
+                    x = int(x * ImageWidth)
+                    y = int(y * ImageHeight)
+                    w = int(w * ImageWidth)
+                    h = int(h * ImageHeight)
+                    parking_pos.append([[x, y], [x+w, y+h]])
+
+            if r.end != r.durations[-1].end:
+                time.append([1, strftime(r.durations[-1].end)])
+            time.append([0, strftime(r.end)])
+
+            d = {
+                'plate': r.plate,
+                'parking_num': r.port_idx,
+                'parking_pos': parking_pos,
+                'time': time
+            }
+            labels.append(d)
+
+        with open(self._label_path, mode='w', encoding='utf-8') as file:
+            json.dump(labels, file, ensure_ascii=False, indent=4)
