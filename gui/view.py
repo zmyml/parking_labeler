@@ -99,6 +99,9 @@ class MainWindow(QtWidgets.QMainWindow):
         self.table_widget.setHorizontalScrollBarPolicy(QtCore.Qt.ScrollBarAlwaysOff)
         self.table_widget.setVerticalScrollBarPolicy(QtCore.Qt.ScrollBarAlwaysOn)
         self.table_widget.setGeometry(0, 645, 800, 155)
+        self.table_widget.setEditTriggers(QtWidgets.QAbstractItemView.NoEditTriggers)
+        self.table_widget.setSelectionBehavior(QtWidgets.QAbstractItemView.SelectRows)
+        self.table_widget.verticalHeader().setHidden(True)
         self.table_widget.setHidden(True)
 
         self.edit_widget = QtWidgets.QWidget(self)
