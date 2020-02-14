@@ -33,8 +33,9 @@ class Image:
 
     def load_thumbnail(self, size):
         if not self.thumbnail:
-            self.thumbnail = PIL.Image.open(self._path)
-            self.thumbnail.thumbnail(size)
+            img = PIL.Image.open(self._path)
+            img.thumbnail(size)
+            self.thumbnail = img
 
     def load_hd(self):
         return PIL.Image.open(self._path)
@@ -86,7 +87,7 @@ class ImageList(QtCore.QObject):
         return self._imgs[item]
 
     def _async_load(self, idx, size):
-        self.imgs[idx].load_thumbnail(size)
+        self._imgs[idx].load_thumbnail(size)
         self._signal.emit(idx)
 
     def prefetch(self, size):
@@ -147,8 +148,18 @@ class RecordList(QtCore.QObject):
             self._signal.connect(observer.record_update)
         self._observer = weakref.ref(observer)
 
+    def __len__(self):
+        return len(self._records)
+
+    def __getitem__(self, item):
+        return self._records[item]
+
     def add_record(self, record):
         self._records.append(record)
+        self._signal.emit()
+
+    def remove_record(self, record):
+        self._records.remove(record)
         self._signal.emit()
 
     def query_carports(self, timestamp):
@@ -163,46 +174,41 @@ class RecordList(QtCore.QObject):
         def strftime(timestamp):
             return datetime.datetime.fromtimestamp(timestamp).strftime('%H_%M_%S')
 
+        # 直接保存records
         with open(self._record_path, mode='w', encoding='utf-8') as file:
             json.dump([r.as_dict() for r in self._records], file, ensure_ascii=False, indent=4)
 
+        # 兼容旧label
         labels = []
         for r in self._records:
             time = []
             parking_pos = []
 
+            # 入场直接2还是先1后2
             if r.begin != r.durations[0].begin:
-                time.append([1, strftime(r.begin)])
-            time.append([2, strftime(r.durations[0].begin)])
+                time.append(['1', strftime(r.begin)])
+            time.append(['2', strftime(r.durations[0].begin)])
 
             for idx, d in enumerate(r.durations):
                 if idx != 0:
                     # 除了第一段，每一段开头一定写
-                    time.append([2, strftime(d.begin)])
-
+                    time.append(['2', strftime(d.begin)])
                 if idx != len(r.durations)-1:
                     # 除了最后一段，都需要检查结尾
                     if d.end != r.durations[idx+1].begin:
-                        time.append([1, strftime(d.end)])
-
+                        time.append(['1', strftime(d.end)])
                 if d.rect:
-                    x, y, w, h = d.rect
-                    x = int(x * ImageWidth)
-                    y = int(y * ImageHeight)
-                    w = int(w * ImageWidth)
-                    h = int(h * ImageHeight)
+                    x, y, w, h = [int(p) for p in d.rect]
                     parking_pos.append([[x, y], [x+w, y+h]])
 
+            # 离场直接0还是先1后0
             if r.end != r.durations[-1].end:
-                time.append([1, strftime(r.durations[-1].end)])
-            time.append([0, strftime(r.end)])
+                time.append(['1', strftime(r.durations[-1].end)])
+            time.append(['0', strftime(r.end)])
 
-            d = {
-                'plate': r.plate,
-                'parking_num': r.port_idx,
-                'parking_pos': parking_pos,
-                'time': time
-            }
+            d = {'plate': r.plate, 'parking_num': r.port_idx, 'time': time}
+            if parking_pos:
+                d['parking_pos'] = parking_pos
             labels.append(d)
 
         with open(self._label_path, mode='w', encoding='utf-8') as file:
