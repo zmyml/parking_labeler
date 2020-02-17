@@ -5,7 +5,7 @@ from PySide2 import QtWidgets
 def main():
     app = QtWidgets.QApplication()
     vm = ViewModel()
-    vm.run()
+    vm.main_win.show()
     app.exec_()
 
 

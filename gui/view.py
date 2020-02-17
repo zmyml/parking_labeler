@@ -1,38 +1,58 @@
 from PySide2 import QtCore, QtGui, QtWidgets
 
 
-def open_dialog():
-    dialog = QtWidgets.QFileDialog()
-    dialog.setFileMode(QtWidgets.QFileDialog.FileMode.Directory)
-    dialog.setOption(QtWidgets.QFileDialog.Option.ShowDirsOnly)
-    return dialog
+class OpenDialog(QtWidgets.QFileDialog):
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+        self.setFileMode(QtWidgets.QFileDialog.FileMode.Directory)
+        self.setOption(QtWidgets.QFileDialog.Option.ShowDirsOnly)
 
 
-def error_dialog(msg):
-    dialog = QtWidgets.QDialog()
-    label = QtWidgets.QLabel()
-    label.setText(msg)
-    button = QtWidgets.QPushButton()
-    button.setText('确定')
-    button.clicked.connect(dialog.accept)
-    layout = QtWidgets.QVBoxLayout()
-    layout.addWidget(label)
-    layout.addWidget(button)
-    dialog.setLayout(layout)
-    return dialog
+class ErrorDialog(QtWidgets.QDialog):
+    def __init__(self, msg, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+        label = QtWidgets.QLabel()
+        label.setText(msg)
+        button = QtWidgets.QPushButton()
+        button.setText('确定')
+        button.clicked.connect(self.accept)
+        layout = QtWidgets.QVBoxLayout()
+        layout.addWidget(label)
+        layout.addWidget(button)
+        self.setLayout(layout)
 
 
 class OverlayWidget(QtWidgets.QWidget):
-    def __init__(self, parent, *args, **kwargs):
-        super().__init__(parent, *args, **kwargs)
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, **kwargs)
         self._polys = []
+        self._rects = []
         self._rect = None
 
-    def set_polys(self, polys):
+    @property
+    def polys(self):
+        return self._polys
+
+    @polys.setter
+    def polys(self, polys):
         self._polys = polys
         self.update()
 
-    def set_rect(self, rect):
+    @property
+    def rects(self):
+        return self._rects
+
+    @rects.setter
+    def rects(self, rects):
+        self._rects = rects
+        self.update()
+
+    @property
+    def rect(self):
+        return self._rect
+
+    @rect.setter
+    def rect(self, rect):
         self._rect = rect
         self.update()
 
@@ -43,52 +63,149 @@ class OverlayWidget(QtWidgets.QWidget):
             points = [QtCore.QPoint(*p) for p in poly['points']]
             points.append(points[0])
             pen = QtGui.QPen()
-            if poly['highlight']:
-                pen.setColor(QtCore.Qt.red)
-            else:
-                pen.setColor(QtCore.Qt.green)
+            color = QtCore.Qt.red if poly['highlight'] else QtCore.Qt.green
+            pen.setColor(color)
             painter.setPen(pen)
             painter.drawPolyline(points)
-        if self._rect:
+        for rect in self._rects:
+            pen = QtGui.QPen()
+            pen.setColor(QtCore.Qt.red)
+            painter.setPen(pen)
+            painter.drawRect(*rect)
+        if self.rect:
             pen = QtGui.QPen()
             pen.setColor(QtCore.Qt.yellow)
             painter.setPen(pen)
-            painter.drawRect(*self._rect)
+            painter.drawRect(*self.rect)
 
 
-class MainWindow(QtWidgets.QMainWindow):
-    _zoom_signal = QtCore.Signal(float, float)
+class ImageWidget(QtWidgets.QWidget):
+    _signal = QtCore.Signal(float, float)
 
-    def __init__(self, vm):
-        super().__init__(None)
-        self.setWindowTitle('停车记录标注')
-        self.setFixedSize(1200, 800)
+    def __init__(self, vm, *args, **kwargs):
+        super().__init__(*args, **kwargs)
 
-        self.img_widget = QtWidgets.QWidget(self)
-        self.img_widget.setGeometry(0, 25, 800, 620)
-        self.img_widget.setHidden(True)
-
-        self.img_label = QtWidgets.QLabel(self.img_widget)
+        self.img_label = QtWidgets.QLabel(self)
         self.img_label.setGeometry(0, 0, 800, 600)
 
-        self.overlay_widget = OverlayWidget(self.img_widget)
+        self.overlay_widget = OverlayWidget(self)
         self.overlay_widget.setGeometry(0, 0, 800, 600)
 
-        self.time_label = QtWidgets.QLabel(self.img_widget)
+        self.time_label = QtWidgets.QLabel(self)
         self.time_label.setStyleSheet('color:black;font-size:40px;background-color:white;')
         self.time_label.setGeometry(10, 10, 160, 40)
 
-        self.touch_widget = QtWidgets.QWidget(self.img_widget)
+        self.touch_widget = QtWidgets.QWidget(self)
         self.touch_widget.setGeometry(0, 0, 800, 600)
         self.touch_widget.installEventFilter(self)
 
-        self.scroll_bar = QtWidgets.QScrollBar(self.img_widget)
+        self.scroll_bar = QtWidgets.QScrollBar(self)
         self.scroll_bar.setOrientation(QtCore.Qt.Orientation.Horizontal)
         self.scroll_bar.setSingleStep(1)
         self.scroll_bar.valueChanged.connect(vm.idx_update)
         self.scroll_bar.setGeometry(0, 600, 800, 20)
 
+        self._signal.connect(vm.zoom)
+        self._point = None
+
+    def eventFilter(self, watched, event):
+        def draw_rect():
+            p = event.l.x(), event.l.y()
+            if self._point and abs(p[0] - self._point[0]) > 10 and abs(p[1] - self._point[1]) > 10:
+                x = min(self._point[0], p[0])
+                y = min(self._point[1], p[1])
+                w = max(self._point[0], p[0]) - x
+                h = max(self._point[1], p[1]) - y
+                r = x, y, w, h
+                self.overlay_widget.rect = r
+                return r
+            return None
+
+        if watched == self.touch_widget:
+            if event.type() == QtCore.QEvent.MouseButtonDblClick:
+                self._signal.emit(event.l.x(), event.l.y())
+                return True
+            if event.type() == QtCore.QEvent.MouseButtonPress:
+                self._point = event.l.x(), event.l.y()
+                return True
+            if event.type() == QtCore.QEvent.MouseMove:
+                draw_rect()
+                return True
+            if event.type() == QtCore.QEvent.MouseButtonRelease:
+                if draw_rect():
+                    self._point = None
+                return True
+        return False
+
+
+class EditWidget(QtWidgets.QWidget):
+    def __init__(self, vm, *args, **kwargs):
+        def create_edit(title, line, placeholder, enabled):
+            if line:
+                edit = QtWidgets.QLineEdit()
+            else:
+                edit = QtWidgets.QTextEdit()
+            edit.setPlaceholderText(placeholder)
+            edit.setEnabled(enabled)
+            layout.addRow(title, edit)
+            return edit
+
+        def create_btn(title, text1, slot1, text2, slot2):
+            h_layout = QtWidgets.QHBoxLayout()
+            button1 = QtWidgets.QPushButton()
+            button1.setText(text1)
+            button1.clicked.connect(slot1)
+            h_layout.addWidget(button1)
+            button2 = QtWidgets.QPushButton()
+            button2.setText(text2)
+            button2.clicked.connect(slot2)
+            h_layout.addWidget(button2)
+            layout.addRow(title, h_layout)
+
+        super().__init__(*args, **kwargs)
+
+        layout = QtWidgets.QFormLayout()
+        self.port_edit = create_edit('泊位', True, 'Ctrl+P，跨车位用逗号分隔', True)
+        self.port_edit.returnPressed.connect(self.port_edit.clearFocus)
+        self.plate_edit = create_edit('车牌', True, 'Ctrl+L，双击图片可放大', True)
+        self.plate_edit.returnPressed.connect(self.plate_edit.clearFocus)
+        self.begin_edit = create_edit('入场时间', True, 'F1使用当前时间, 留空默认为第一张', False)
+        self.stable_edit = create_edit('停稳时间', True, 'F2，留空默认为入场时间', False)
+        self.unstable_edit = create_edit('移动时间', True, 'F3，留空默认为离场/下个停稳时间', False)
+        self.end_edit = create_edit('离场时间', True, 'F4，留空默认为未出场', False)
+        self.rect_edit = create_edit('车辆位置', True, 'F5，使用当前矩形，跨车位才需要', False)
+        create_btn('停稳时段', '添加 (F6)', vm.add_duration, '删除 (F7)', vm.remove_duration)
+        self.duration_edit = create_edit('已有时段', False, '只有一段或最后一段不需要添加，设置完成直接确定', False)
+        self.duration_edit.setMaximumHeight(75)
+        self.mode_label = QtWidgets.QLabel()
+        self.mode_label.setText('添加记录')
+        create_btn(self.mode_label, '确定', vm.confirm, '取消', vm.cancel)
+        self.setLayout(layout)
+
+
+class MainWindow(QtWidgets.QMainWindow):
+    def __init__(self, vm, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+        self.setWindowTitle('停车记录标注')
+        self.setFixedSize(1200, 800)
+
+        self.image_widget = ImageWidget(vm, self)
+        self._init_image_widget()
+
         self.table_widget = QtWidgets.QTableWidget(self)
+        self._init_table_widget()
+
+        self.edit_widget = EditWidget(vm, self)
+        self._init_edit_widget()
+
+        self._init_menu(vm)
+        self._init_shortcut(vm)
+
+    def _init_image_widget(self):
+        self.image_widget.setHidden(True)
+        self.image_widget.setGeometry(0, 23, 800, 620)
+
+    def _init_table_widget(self):
         self.table_widget.setColumnCount(5)
         self.table_widget.setColumnWidth(0, 80)
         self.table_widget.setColumnWidth(1, 100)
@@ -98,216 +215,63 @@ class MainWindow(QtWidgets.QMainWindow):
         self.table_widget.setHorizontalHeaderLabels(['泊位', '车牌', '入场时间', '停稳时段', '离场时间'])
         self.table_widget.setHorizontalScrollBarPolicy(QtCore.Qt.ScrollBarAlwaysOff)
         self.table_widget.setVerticalScrollBarPolicy(QtCore.Qt.ScrollBarAlwaysOn)
-        self.table_widget.setGeometry(0, 645, 800, 155)
+        self.table_widget.verticalHeader().setHidden(True)
         self.table_widget.setEditTriggers(QtWidgets.QAbstractItemView.NoEditTriggers)
         self.table_widget.setSelectionBehavior(QtWidgets.QAbstractItemView.SelectRows)
-        self.table_widget.verticalHeader().setHidden(True)
         self.table_widget.setHidden(True)
+        self.table_widget.setGeometry(0, 643, 800, 157)
 
-        self.edit_widget = QtWidgets.QWidget(self)
-        self.edit_widget.setGeometry(800, 25, 400, 775)
+    def _init_edit_widget(self):
         self.edit_widget.setHidden(True)
-
-        port_label = QtWidgets.QLabel()
-        port_label.setText('泊位')
-        self.port_edit = QtWidgets.QTextEdit()
-        self.port_edit.setPlaceholderText('跨车位用逗号分隔')
-        self.port_edit.setMaximumHeight(25)
-        self.port_edit.setFocus()
-
-        plate_label = QtWidgets.QLabel()
-        plate_label.setText('车牌')
-        self.plate_edit = QtWidgets.QTextEdit()
-        self.plate_edit.setPlaceholderText('双击图片可放大')
-        self.plate_edit.setMaximumHeight(25)
-
-        begin_label = QtWidgets.QLabel()
-        begin_label.setText('入场时间')
-        self.begin_edit = QtWidgets.QTextEdit()
-        self.begin_edit.setPlaceholderText('按F1使用当前时间, 留空默认为第一张')
-        self.begin_edit.setMaximumHeight(25)
-        self.begin_edit.setEnabled(False)
-
-        stable_label = QtWidgets.QLabel()
-        stable_label.setText('停稳时间')
-        self.stable_edit = QtWidgets.QTextEdit()
-        self.stable_edit.setPlaceholderText('F2，留空默认为入场时间')
-        self.stable_edit.setMaximumHeight(25)
-        self.stable_edit.setEnabled(False)
-
-        unstable_label = QtWidgets.QLabel()
-        unstable_label.setText('移动时间')
-        self.unstable_edit = QtWidgets.QTextEdit()
-        self.unstable_edit.setPlaceholderText('F3，留空默认为离场/下个停稳时间')
-        self.unstable_edit.setMaximumHeight(25)
-        self.unstable_edit.setEnabled(False)
-
-        rect_label = QtWidgets.QLabel()
-        rect_label.setText('车辆位置')
-        self.rect_edit = QtWidgets.QTextEdit()
-        self.rect_edit.setPlaceholderText('按F5使用当前矩形，未跨车位不需要')
-        self.rect_edit.setMaximumHeight(25)
-        self.rect_edit.setEnabled(False)
-
-        duration_label = QtWidgets.QLabel()
-        duration_label.setText('已有停稳时段')
-        self.duration_edit = QtWidgets.QTextEdit()
-        self.duration_edit.setPlaceholderText('只有一个停稳时段或最后一个停稳时段不需要添加，设置好直接确定')
-        self.duration_edit.setMaximumHeight(75)
-        self.duration_edit.setEnabled(False)
-
-        add_button = QtWidgets.QPushButton()
-        add_button.setText('添加停稳时段 (F6)')
-        add_button.clicked.connect(vm.add_duration)
-        remove_button = QtWidgets.QPushButton()
-        remove_button.setText('删除停稳时段 (F7)')
-        remove_button.clicked.connect(vm.remove_duration)
-
-        end_label = QtWidgets.QLabel()
-        end_label.setText('离场时间')
-        self.end_edit = QtWidgets.QTextEdit()
-        self.end_edit.setPlaceholderText('F4，留空默认为未出场')
-        self.end_edit.setMaximumHeight(25)
-        self.end_edit.setEnabled(False)
-
-        ok_btn = QtWidgets.QPushButton()
-        ok_btn.setText('确定')
-        ok_btn.clicked.connect(vm.ok)
-        cancel_btn = QtWidgets.QPushButton()
-        cancel_btn.setText('取消')
-        cancel_btn.clicked.connect(vm.cancel)
-
-        layout = QtWidgets.QGridLayout()
-        layout.addWidget(port_label, 0, 0)
-        layout.addWidget(self.port_edit, 0, 1)
-        layout.addWidget(plate_label, 1, 0)
-        layout.addWidget(self.plate_edit, 1, 1)
-        layout.addWidget(begin_label, 2, 0)
-        layout.addWidget(self.begin_edit, 2, 1)
-        layout.addWidget(stable_label, 3, 0)
-        layout.addWidget(self.stable_edit, 3, 1)
-        layout.addWidget(unstable_label, 4, 0)
-        layout.addWidget(self.unstable_edit, 4, 1)
-        layout.addWidget(rect_label, 5, 0)
-        layout.addWidget(self.rect_edit, 5, 1)
-        layout.addWidget(duration_label, 6, 0)
-        layout.addWidget(self.duration_edit, 6, 1)
-        layout.addWidget(add_button, 7, 0)
-        layout.addWidget(remove_button, 7, 1)
-        layout.addWidget(end_label, 8, 0)
-        layout.addWidget(self.end_edit, 8, 1)
-        layout.addWidget(ok_btn, 9, 0)
-        layout.addWidget(cancel_btn, 9, 1)
-        self.edit_widget.setLayout(layout)
-
-        self._point = None
-        self.rect = None
-        self._qimg = None
-        self._zoom_signal.connect(vm.zoom)
-
-        self._init_menu(vm)
-        self._init_shortcut(vm)
+        self.edit_widget.setGeometry(800, 23, 400, 777)
 
     def _init_menu(self, vm):
+        def create_action(name, key, slot):
+            action = QtWidgets.QAction(name, self)
+            action.setShortcut(key)
+            action.triggered.connect(slot)
+            return action
+
         menu_bar = self.menuBar()
-
         file_menu = menu_bar.addMenu('文件')
-
-        open_action = QtWidgets.QAction('打开', self)
-        open_action.triggered.connect(vm.open)
+        open_action = create_action('打开', QtGui.QKeySequence.fromString('Ctrl+O'), vm.open)
         file_menu.addAction(open_action)
-
         file_menu.addSeparator()
-
-        exit_action = QtWidgets.QAction('退出', self)
-        exit_action.triggered.connect(QtWidgets.QApplication.quit)
+        exit_action = create_action('退出', QtGui.QKeySequence.fromString('Alt+F4'), QtWidgets.QApplication.quit)
         file_menu.addAction(exit_action)
+        record_menu = menu_bar.addMenu('记录')
+        edit_action = create_action('编辑', QtGui.QKeySequence.fromString('Ctrl+E'), vm.edit_record)
+        remove_action = create_action('删除', QtGui.QKeySequence.fromString('Ctrl+D'), vm.remove_record)
+        record_menu.addActions([edit_action, remove_action])
 
     def _init_shortcut(self, vm):
-        previous = QtWidgets.QAction(self)
-        previous.setShortcut(QtGui.QKeySequence.MoveToPreviousChar)
-        previous.triggered.connect(self.previous)
+        def create_action(key, slot):
+            action = QtWidgets.QAction(self)
+            action.setShortcut(key)
+            action.triggered.connect(slot)
+            return action
 
-        next_ = QtWidgets.QAction(self)
-        next_.setShortcut(QtGui.QKeySequence.MoveToNextChar)
-        next_.triggered.connect(self.next)
-
-        begin = QtWidgets.QAction(self)
-        begin.setShortcut(QtGui.QKeySequence.fromString('F1'))
-        begin.triggered.connect(vm.begin)
-
-        stable = QtWidgets.QAction(self)
-        stable.setShortcut(QtGui.QKeySequence.fromString('F2'))
-        stable.triggered.connect(vm.stable)
-
-        unstable = QtWidgets.QAction(self)
-        unstable.setShortcut(QtGui.QKeySequence.fromString('F3'))
-        unstable.triggered.connect(vm.unstable)
-
-        rect = QtWidgets.QAction(self)
-        rect.setShortcut(QtGui.QKeySequence.fromString('F5'))
-        rect.triggered.connect(vm.rect)
-
-        add = QtWidgets.QAction(self)
-        add.setShortcut(QtGui.QKeySequence.fromString('F6'))
-        add.triggered.connect(vm.add_duration)
-
-        remove = QtWidgets.QAction(self)
-        remove.setShortcut(QtGui.QKeySequence.fromString('F7'))
-        remove.triggered.connect(vm.remove_duration)
-
-        end = QtWidgets.QAction(self)
-        end.setShortcut(QtGui.QKeySequence.fromString('F4'))
-        end.triggered.connect(vm.end)
-
-        esc = QtWidgets.QAction(self)
-        esc.setShortcut(QtGui.QKeySequence.fromString('Esc'))
-        esc.triggered.connect(self.esc)
-
-        self.addActions([previous, next_, begin, stable, unstable, end, rect, add, remove, esc])
+        left = create_action(QtGui.QKeySequence.MoveToPreviousChar, self.left)
+        right = create_action(QtGui.QKeySequence.MoveToNextChar, self.right)
+        up = create_action(QtGui.QKeySequence.MoveToPreviousLine, vm.up)
+        down = create_action(QtGui.QKeySequence.MoveToNextLine, vm.down)
+        port = create_action(QtGui.QKeySequence.fromString('Ctrl+P'), self.edit_widget.port_edit.setFocus)
+        plate = create_action(QtGui.QKeySequence.fromString('Ctrl+L'), self.edit_widget.plate_edit.setFocus)
+        begin = create_action(QtGui.QKeySequence.fromString('F1'), vm.begin)
+        stable = create_action(QtGui.QKeySequence.fromString('F2'), vm.stable)
+        unstable = create_action(QtGui.QKeySequence.fromString('F3'), vm.unstable)
+        end = create_action(QtGui.QKeySequence.fromString('F4'), vm.end)
+        rect = create_action(QtGui.QKeySequence.fromString('F5'), vm.rect)
+        add = create_action(QtGui.QKeySequence.fromString('F6'), vm.add_duration)
+        remove = create_action(QtGui.QKeySequence.fromString('F7'), vm.remove_duration)
+        self.addActions([left, right, up, down, port, plate, begin, stable, unstable, end, rect, add, remove])
 
     @QtCore.Slot()
-    def previous(self):
-        value = self.scroll_bar.value()
-        self.scroll_bar.setValue(value - 1)
+    def left(self):
+        value = self.image_widget.scroll_bar.value()
+        self.image_widget.scroll_bar.setValue(value-1)
 
     @QtCore.Slot()
-    def next(self):
-        value = self.scroll_bar.value()
-        self.scroll_bar.setValue(value + 1)
-
-    @QtCore.Slot()
-    def esc(self):
-        self.port_edit.clearFocus()
-        self.plate_edit.clearFocus()
-
-    def eventFilter(self, watched, event):
-        def get_rect():
-            p = event.l.x(), event.l.y()
-            if self._point and abs(p[0] - self._point[0]) > 10 and abs(p[1] - self._point[1]) > 10:
-                x = min(self._point[0], p[0])
-                y = min(self._point[1], p[1])
-                w = max(self._point[0], p[0]) - x
-                h = max(self._point[1], p[1]) - y
-                r = x, y, w, h
-                self.overlay_widget.set_rect(r)
-                return r
-            return None
-
-        if watched == self.touch_widget:
-            if event.type() == QtCore.QEvent.MouseButtonDblClick:
-                self._zoom_signal.emit(event.l.x(), event.l.y())
-                return True
-            if event.type() == QtCore.QEvent.MouseButtonPress:
-                self._point = event.l.x(), event.l.y()
-                return True
-            if event.type() == QtCore.QEvent.MouseButtonRelease:
-                rect = get_rect()
-                if rect is not None:
-                    self.rect = rect
-                    self._point = None
-                return True
-            if event.type() == QtCore.QEvent.MouseMove:
-                get_rect()
-                return True
-        return False
+    def right(self):
+        value = self.image_widget.scroll_bar.value()
+        self.image_widget.scroll_bar.setValue(value + 1)

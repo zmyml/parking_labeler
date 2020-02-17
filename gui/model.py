@@ -14,7 +14,8 @@ ImageHeight = 2448
 
 
 class Camera:
-    def __init__(self, camera_id):
+    def __init__(self, path):
+        dst, camera_id = os.path.split(path)
         self.carports = []
         for port in parking_line[camera_id]:
             port = [(p[0]/ImageWidth, p[1]/ImageHeight) for p in port]
@@ -67,15 +68,17 @@ class ImageList(QtCore.QObject):
 
     @property
     def observer(self):
-        return self._observer()
+        return self._observer
 
     @observer.setter
     def observer(self, observer):
         if self._observer:
-            self._signal.disconnect(self._observer().img_update)
+            self._signal.disconnect(self._observer.img_update)
         if observer:
             self._signal.connect(observer.img_update)
-        self._observer = weakref.ref(observer)
+            self._observer = weakref.proxy(observer)
+        else:
+            self._observer = None
 
     def __del__(self):
         self._pool.shutdown(wait=False)
@@ -138,15 +141,17 @@ class RecordList(QtCore.QObject):
 
     @property
     def observer(self):
-        return self._observer()
+        return self._observer
 
     @observer.setter
     def observer(self, observer):
         if self._observer:
-            self._signal.disconnect(self._observer().record_update)
+            self._signal.disconnect(self._observer.record_update)
         if observer:
             self._signal.connect(observer.record_update)
-        self._observer = weakref.ref(observer)
+            self._observer = weakref.proxy(observer)
+        else:
+            self._observer = None
 
     def __len__(self):
         return len(self._records)
@@ -162,13 +167,17 @@ class RecordList(QtCore.QObject):
         self._records.remove(record)
         self._signal.emit()
 
-    def query_carports(self, timestamp):
-        busy = set()
+    def query(self, timestamp):
+        busy_carports = set()
+        rects = []
         for record in self._records:
             if record.begin <= timestamp < record.end:
                 for idx in record.port_idx:
-                    busy.add(idx)
-        return busy
+                    busy_carports.add(idx)
+                for d in record.durations:
+                    if d.rect and d.begin <= timestamp <= d.end:
+                        rects.append(d.rect)
+        return busy_carports, rects
 
     def save(self):
         def strftime(timestamp):
